@@ -1,0 +1,10 @@
+[repository]
+name = "hyprspan"
+authors = ["Jagapathi"]
+commit_pins = []
+
+[hyprspan]
+description = "Spans fullscreen X11 windows across monitors via _NET_WM_FULLSCREEN_MONITORS (Citrix Workspace, VMware, xfreerdp /multimon)"
+authors = ["Jagapathi"]
+output = "hyprspan.so"
+build = ["make all"]

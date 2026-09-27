@@ -1,0 +1,7 @@
+*.so
+
+# written by tests/run_suite.sh
+tests/hyprland.lua
+tests/instance.txt
+tests/xdisplay.txt
+tests/run-*/
