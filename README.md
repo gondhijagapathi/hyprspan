@@ -71,3 +71,7 @@ tests/stop_nested.sh
 ```
 
 It needs `grim`, `xdotool`, `kitty`, `quickshell` (for a stand-in bar) and PyGObject with GTK 3.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
