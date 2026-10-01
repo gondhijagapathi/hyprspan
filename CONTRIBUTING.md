@@ -34,20 +34,30 @@ make && tests/run_suite.sh
 tests/stop_nested.sh
 ```
 
-`tests/run_suite.sh` starts a nested Hyprland as a window inside your session, loads the plugin into it and walks
-through the scenarios in the README. It needs `grim`, `xdotool`, `kitty`, `quickshell` and PyGObject with GTK 3.
+`tests/run_suite.sh` starts a nested Hyprland with two headless monitors next to your session, loads the plugin
+into it and walks through the scenarios in the README. Run it from inside a Hyprland session. It needs `grim`,
+`xdotool`, `kitty`, `quickshell` and PyGObject with GTK 3 and pycairo.
 
-The suite does not pass or fail by itself. It prints the plugin state and window geometry after each step and saves
-screenshots under `tests/run-*/`, and you compare those with what the step title says should happen. When a change
-alters behaviour, add a step that shows it.
+Every step prints `PASS` or `FAIL` for each thing it checks, with the expected and actual value on a failure. The
+last line counts them and the exit status is non-zero when a check failed. The plugin state and window geometry are
+printed along the way and screenshots are saved under `tests/run-*/`, which helps when a check fails.
+
+When a change alters behaviour, add a step with a `check` for it. A check names what should be true, the expected
+output and the command that prints it:
+
+```sh
+check "the workspace on SPAN2 is covered" "2 on SPAN2" covered
+```
 
 ## Pull requests
 
 - Branch from `main` and keep each pull request to one change.
 - Describe the behaviour a user will see first, then how the code gets there.
-- State the Hyprland version you tested on and paste the output of `tests/run_suite.sh`, or say why you could not
-  run it.
+- State the Hyprland version you tested on and the last line of `tests/run_suite.sh` (`== N passed, 0 failed`), or
+  say why you could not run it.
 - The `build` check compiles the plugin against Arch's current `hyprland` package and has to pass.
+- The `test` check runs `tests/run_suite.sh` against that same package. When it fails, its `test-run` artifact has
+  the screenshots and logs.
 - Follow the style of `main.cpp`: four-space indent, `S` and `e` prefixes on structs and enums, `g_` on globals, and
   comments that explain why the code is there rather than what it does.
 - Update the Behaviour section of the README when behaviour changes.
