@@ -34,8 +34,9 @@ make && tests/run_suite.sh
 tests/stop_nested.sh
 ```
 
-`tests/run_suite.sh` starts a nested Hyprland as a window inside your session, loads the plugin into it and walks
-through the scenarios in the README. It needs `grim`, `xdotool`, `kitty`, `quickshell` and PyGObject with GTK 3.
+`tests/run_suite.sh` starts a nested Hyprland with two headless monitors next to your session, loads the plugin
+into it and walks through the scenarios in the README. Run it from inside a Hyprland session. It needs `grim`,
+`xdotool`, `kitty`, `quickshell` and PyGObject with GTK 3 and pycairo.
 
 Every step prints `PASS` or `FAIL` for each thing it checks, with the expected and actual value on a failure. The
 last line counts them and the exit status is non-zero when a check failed. The plugin state and window geometry are
@@ -55,6 +56,8 @@ check "the workspace on SPAN2 is covered" "2 on SPAN2" covered
 - State the Hyprland version you tested on and the last line of `tests/run_suite.sh` (`== N passed, 0 failed`), or
   say why you could not run it.
 - The `build` check compiles the plugin against Arch's current `hyprland` package and has to pass.
+- The `test` check runs `tests/run_suite.sh` against that same package. When it fails, its `test-run` artifact has
+  the screenshots and logs.
 - Follow the style of `main.cpp`: four-space indent, `S` and `e` prefixes on structs and enums, `g_` on globals, and
   comments that explain why the code is there rather than what it does.
 - Update the Behaviour section of the README when behaviour changes.

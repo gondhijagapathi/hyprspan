@@ -60,12 +60,12 @@ library mapped, so a reload of the same path silently runs the old code.
 
 ## Tests
 
-`tests/run_suite.sh` starts a throwaway nested Hyprland (a window inside your session, never the session itself)
-with a second, headless monitor, loads `hyprspan.so` into it, and walks through the scenarios above with a GTK test
-client that asks for fullscreen on all monitors the same way Citrix does. After each step it checks the plugin
-state, the window geometry and what the second monitor shows, and prints `PASS` or `FAIL` for every check. The last
-line counts them, and the exit status is non-zero when a check failed. Screenshots of both monitors are saved under
-`tests/run-*/`.
+`tests/run_suite.sh` starts a throwaway nested Hyprland (a separate instance, never your session, and without a
+window in it) with two headless monitors, loads `hyprspan.so` into it, and walks through the scenarios above with a
+GTK test client that asks for fullscreen on all monitors the same way Citrix does. After each step it checks the
+plugin state, the window geometry and what the second monitor shows, and prints `PASS` or `FAIL` for every check.
+The last line counts them, and the exit status is non-zero when a check failed. Screenshots of both monitors are
+saved under `tests/run-*/`.
 
 ```sh
 make && tests/run_suite.sh
@@ -79,10 +79,15 @@ tests/stop_nested.sh
   PASS the workspace on SPAN2 is covered
   PASS SPAN2 shows the client instead of its bar
 ...
-== 34 passed, 0 failed
+== 35 passed, 0 failed
 ```
 
-It needs `grim`, `xdotool`, `kitty`, `quickshell` (for a stand-in bar) and PyGObject with GTK 3.
+Run it from inside a Hyprland session. It needs `grim`, `xdotool`, `kitty`, `quickshell` (for a stand-in bar) and
+PyGObject with GTK 3 and pycairo.
+
+The `test` workflow runs the same suite on every pull request. `tests/ci.sh` does that on a machine with no
+session and no GPU: in an Arch container, with labwc on a virtual (`vkms`) graphics card as the session and
+software rendering. The screenshots and logs of each run are attached to it as the `test-run` artifact.
 
 ## License
 
