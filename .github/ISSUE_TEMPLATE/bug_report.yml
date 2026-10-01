@@ -1,0 +1,61 @@
+name: Bug report
+description: A window does not span, spans wrongly, or Hyprland misbehaves with hyprspan loaded
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before reporting a window that stays on one monitor, check the monitor layout note under
+        [Behaviour](https://github.com/gondhijagapathi/hyprspan#behaviour): the span only works when the covered
+        monitors form one top-aligned row, and hyprspan shows a notification when they do not.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what you got instead.
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: Application
+      description: The X11 app that asks for the span, with its version.
+      placeholder: Citrix Workspace 24.11, xfreerdp /multimon, ...
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How hyprspan was installed
+      options:
+        - hyprpm
+        - built with make
+    validations:
+      required: true
+  - type: textarea
+    id: hyprland-version
+    attributes:
+      label: hyprctl version
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: monitors
+    attributes:
+      label: hyprctl monitors
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: hyprspan-state
+    attributes:
+      label: hyprctl hyprspan
+      description: Run it while the app is fullscreen.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Notifications hyprspan showed, a crash report, relevant parts of your config.
