@@ -50,11 +50,14 @@ shot() { WAYLAND_DISPLAY=$NWL timeout 5 grim -o "$1" "$RUN/$2.png" || echo "  (n
 
 # What the checks look at. Each prints one line.
 monitors() { hyprctl monitors -j | python3 -c 'import json,sys; print(" ".join(m["name"] for m in json.load(sys.stdin)))'; }
+ws_on() { hyprctl monitors -j | python3 -c 'import json,sys; print(next(m["activeWorkspace"]["name"] for m in json.load(sys.stdin) if m["name"] == sys.argv[1]))' "$1"; }
 active() { hyprctl activewindow -j | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title"))'; }
+client_focused() { [ "$(active)" = span-test-all ] && echo yes || echo no; }
 win() { hyprctl clients -j | python3 "$T/win.py" "$1"; }
 mode() { win "$1" | cut -d' ' -f3; }
 # the test client's request as hyprctl hyprspan reports it: "x,y WxH active|inactive"
 request() { hyprctl hyprspan | sed -n 's/^window .*(span-test-all).* box //p' | grep . || echo none; }
+released() { hyprctl hyprspan | sed -n 's/^  released //p' | paste -sd, | grep . || echo none; }
 covered() { hyprctl hyprspan | sed -n 's/^covering workspace //p' | paste -sd, | grep . || echo none; }
 xpointer() { eval "$(xdotool getmouselocation --shell)"; xdotool getwindowname "$WINDOW" 2> /dev/null || echo none; }
 # the colour of one pixel in the top left corner of SPAN2, as rrggbb: the bar's when the monitor shows its own
@@ -74,11 +77,18 @@ spanning() {
 	check "the request is active over both monitors" "$SPAN active" request
 	check "the client is fullscreen at the size of both monitors" "$SPAN fullscreen" win span-test-all
 	check "the workspace on SPAN2 is covered" "2 on SPAN2" covered
+	check "no monitor is released" none released
 	check "SPAN2 shows the client instead of its bar" $CLIENT corner
 }
 not_spanning() {
 	check "no workspace is covered" none covered
 	check "SPAN2 shows its bar" $BAR corner
+}
+# SPAN2 shows its own workspace again while the client keeps its full size
+given_back() {
+	check "SPAN2 is released" SPAN2 released
+	not_spanning
+	check "the client stays fullscreen at the size of both monitors" "$SPAN fullscreen" win span-test-all
 }
 
 # hyprctl answers once the nested Hyprland is up
@@ -98,6 +108,7 @@ export DISPLAY=$(tr '\0' '\n' < /proc/$CPID/environ | sed -n 's/^DISPLAY=//p'); 
 
 echo "== 1. span client fullscreen on SPAN1, local-app + bar on SPAN2"; state; shot SPAN1 s1-left; shot SPAN2 s1-right
 spanning
+LOCAL=$(win local-app)
 
 echo "== 2. pointer onto SPAN2 (covered monitor)"
 d "hl.dsp.cursor.move({ x = $((W1 + 300)), y = 300 })"; sleep 1
@@ -110,9 +121,44 @@ d "hl.dsp.cursor.move({ x = $((W1 + 500)), y = 400 })"; sleep 1
 check "the client keeps the focus with the pointer over SPAN2" span-test-all active
 spanning
 
+echo "== 2c. go to the covered workspace with the pointer already on it (SPAN2 is given back, client stays fullscreen)"
+d "hl.dsp.focus({ workspace = 2 })"; sleep 1; state; shot SPAN2 s2c-right
+given_back
+check "the client loses the focus" no client_focused
+d "hl.dsp.cursor.move({ x = $((W1 + 8)), y = 300 })"; sleep 1
+check "SPAN2 stays released with the pointer beside local-app" SPAN2 released
+check "the client does not take the focus back" no client_focused
+echo "== 2d. back to the client's workspace (SPAN2 is covered again)"
+d "hl.dsp.focus({ workspace = 1 })"; sleep 1; state; shot SPAN2 s2d-right
+check "the client has the focus" span-test-all active
+spanning
+echo "== 2e. go to the covered workspace from the client's monitor, then back"
+d "hl.dsp.focus({ workspace = 2 })"; sleep 1; state
+given_back
+d "hl.dsp.focus({ workspace = 1 })"; sleep 1
+spanning
+echo "== 2f. switch the covered monitor to an empty workspace, then back"
+d "hl.dsp.cursor.move({ x = $((W1 + 500)), y = 400 })"; sleep 0.5; d "hl.dsp.focus({ workspace = 5 })"; sleep 1; state
+check "SPAN2 shows workspace 5" 5 ws_on SPAN2
+given_back
+d "hl.dsp.focus({ workspace = 2 })"; d "hl.dsp.focus({ workspace = 1 })"; sleep 1
+spanning
+echo "== 2g. a tiled window opens on the covered workspace"
+d "hl.dsp.cursor.move({ x = $((W1 + 500)), y = 400 })"; sleep 0.5; d "hl.dsp.exec_cmd(\"kitty --title late-tiled\")"; sleep 3; state
+check "the new window has the focus" late-tiled active
+given_back
+echo "== 2h. back to the client; the new window closes while its workspace is covered (local-app gets the space back in step 3)"
+d "hl.dsp.focus({ workspace = 1 })"; sleep 1
+spanning
+pkill -f "kitty --title late-tiled"; sleep 1; state
+check "the new window is gone" gone win late-tiled
+check "the workspace on SPAN2 stays covered" "2 on SPAN2" covered
+check "the client stays fullscreen at the size of both monitors" "$SPAN fullscreen" win span-test-all
+
 echo "== 3. client asks for its current monitor only (GTK reset message)"; kill -USR1 $CPID; sleep 1.5; state; shot SPAN2 s3-right
 check "the request is gone" none request
 check "the client is fullscreen on SPAN1 only" "0,0 1280x720 fullscreen" win span-test-all
+check "local-app has its workspace to itself again" "$LOCAL" win local-app
 not_spanning
 echo "== 4. client asks for all monitors again"; kill -USR2 $CPID; sleep 1.5; state
 spanning
@@ -122,11 +168,18 @@ check "the request is kept but inactive" "$SPAN inactive" request
 not_spanning
 echo "== 6. client re-enters fullscreen (request should still apply)"; kill -HUP $CPID; sleep 1.5; state
 spanning
+echo "== 6b. plugin reloaded under the spanning client (the request is picked up from the window again)"
+cp "$PLUGIN" "$RUN/hyprspan-reloaded.so" # a second path, see the note at the top about dlopen
+out=$(hyprctl plugin unload "$RUN/hyprspan.so"); check "the plugin unloads" ok echo "$out"; sleep 1; state
+check "the client is fullscreen on SPAN1 only" "0,0 1280x720 fullscreen" win span-test-all
+check "SPAN2 shows its bar" $BAR corner
+out=$(hyprctl plugin load "$RUN/hyprspan-reloaded.so"); check "the plugin loads again" ok echo "$out"; sleep 1; state
+spanning
 echo "== 7. client exits"; pkill -f "span_client.py $RUN/late.log"; kill $CPID; sleep 1.5; state; shot SPAN2 s7-right
 check "the client's window is gone" gone win span-test-all
 check "the request is gone" none request
 not_spanning
-echo "== 8. unload plugin"; out=$(hyprctl plugin unload "$RUN/hyprspan.so"); check "the plugin unloads" ok echo "$out"; sleep 0.5
+echo "== 8. unload plugin"; out=$(hyprctl plugin unload "$RUN/hyprspan-reloaded.so"); check "the plugin unloads" ok echo "$out"; sleep 0.5
 check "the nested Hyprland is still running" yes sh -c "kill -0 $3 2> /dev/null && echo yes || echo no"
 
 echo "RUN=$RUN"
