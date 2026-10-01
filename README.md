@@ -1,4 +1,4 @@
-# hyprspan
+# hyprspan  (Not officially related to Hyprland, this is a unofficial plugin)
 
 A Hyprland plugin that lets X11 apps go fullscreen across several monitors, the way Citrix Workspace, VMware,
 `xfreerdp /multimon` and `remote-viewer` expect to.
