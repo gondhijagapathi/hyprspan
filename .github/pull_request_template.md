@@ -6,5 +6,5 @@
 
 - Hyprland version:
 - [ ] `make` builds without new warnings
-- [ ] `tests/run_suite.sh` output pasted below, or a note on why it was not run
+- [ ] `tests/run_suite.sh` passes (paste its last line), or a note on why it was not run
 - [ ] README updated if behaviour changed

@@ -62,12 +62,24 @@ library mapped, so a reload of the same path silently runs the old code.
 
 `tests/run_suite.sh` starts a throwaway nested Hyprland (a window inside your session, never the session itself)
 with a second, headless monitor, loads `hyprspan.so` into it, and walks through the scenarios above with a GTK test
-client that asks for fullscreen on all monitors the same way Citrix does. It prints the plugin state and window
-geometry after each step and saves screenshots of both monitors under `tests/run-*/`.
+client that asks for fullscreen on all monitors the same way Citrix does. After each step it checks the plugin
+state, the window geometry and what the second monitor shows, and prints `PASS` or `FAIL` for every check. The last
+line counts them, and the exit status is non-zero when a check failed. Screenshots of both monitors are saved under
+`tests/run-*/`.
 
 ```sh
 make && tests/run_suite.sh
 tests/stop_nested.sh
+```
+
+```
+== 4. client asks for all monitors again
+  PASS the request is active over both monitors
+  PASS the client is fullscreen at the size of both monitors
+  PASS the workspace on SPAN2 is covered
+  PASS SPAN2 shows the client instead of its bar
+...
+== 34 passed, 0 failed
 ```
 
 It needs `grim`, `xdotool`, `kitty`, `quickshell` (for a stand-in bar) and PyGObject with GTK 3.
