@@ -52,11 +52,13 @@ library mapped, so a reload of the same path silently runs the old code.
   hyprspan leaves the window on one monitor and shows a notification, rather than showing the wrong part of the
   window on each monitor.
 - **Scale.** `xwayland:force_zero_scaling` must be off, which is the default.
-- **Covered monitors behave like a fullscreen workspace.** Hyprland's usual rules apply there: focusing a window
-  on a covered monitor, or a new window there asking to be maximised or fullscreen, takes the spanning window out
-  of fullscreen (see `misc:on_focus_under_fullscreen`). Switching workspaces on a covered monitor keeps it covered;
-  switch the spanning window's own workspace, or leave fullscreen, to see that monitor again.
-- **Hotplug.** Requests survive monitors being added, removed or moved, and resume once the layout lines up again.
+- **Leaving and coming back.** Go to a workspace on a covered monitor, focus a tiled window there or open one
+  there, and that monitor shows its own workspace again. The spanning window stays fullscreen at its full size
+  meanwhile, so a remote session is not resized, and it covers the monitor again as soon as it is focused. On
+  the spanning window's own workspace Hyprland's usual fullscreen rules apply (see
+  `misc:on_focus_under_fullscreen`).
+- **Hotplug and reload.** Requests survive monitors being added, removed or moved, and resume once the layout
+  lines up again. They also survive the plugin being reloaded.
 
 ## Tests
 

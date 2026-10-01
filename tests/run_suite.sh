@@ -29,7 +29,9 @@ echo "nested: $info" > "$T/instance.txt"
 set -- $info; export HYPRLAND_INSTANCE_SIGNATURE=$1; NWL=$2
 d() { hyprctl dispatch "$1" > /dev/null; }
 state() { echo "  hyprspan: $(hyprctl hyprspan | tr '\n' ';')"; hyprctl clients -j | python3 "$T/clients.py" | sed 's/^/  /'; }
-shot() { WAYLAND_DISPLAY=$NWL grim -o "$1" "$RUN/$2.png"; }
+# the nested window only renders while it is visible in the outer session, so don't wait for it forever
+shot() { WAYLAND_DISPLAY=$NWL timeout 5 grim -o "$1" "$RUN/$2.png" || echo "  (no screenshot of $1)"; }
+active() { hyprctl activewindow -j | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title"))'; }
 
 hyprctl output create headless SPAN2 > /dev/null; sleep 1
 W1=$(hyprctl monitors -j | python3 -c 'import json,sys; print(next(m["width"] for m in json.load(sys.stdin) if m["name"]=="WAYLAND-1"))')
@@ -47,19 +49,39 @@ echo "== 1. span client fullscreen on WAYLAND-1, local-app + bar on SPAN2"; stat
 
 echo "== 2. pointer onto SPAN2 (covered monitor)"
 d "hl.dsp.cursor.move({ x = $((W1 + 300)), y = 300 })"; sleep 1
-echo "  active window: $(hyprctl activewindow -j | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title"))')"
+echo "  active window: $(active)"
 eval "$(xdotool getmouselocation --shell)"; echo "  X pointer at $X,$Y over: $(xdotool getwindowname "$WINDOW" 2>/dev/null || echo "root/none")"
 
 echo "== 2b. a floating window opens silently on the covered workspace"
 d "hl.dsp.exec_cmd(\"env GDK_BACKEND=x11 python3 $T/span_client.py $RUN/late.log window\")"; sleep 3; state; shot SPAN2 s2b-right
 d "hl.dsp.cursor.move({ x = $((W1 + 500)), y = 400 })"; sleep 1
-echo "  active window after pointer move over SPAN2: $(hyprctl activewindow -j | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title"))')"
+echo "  active window after pointer move over SPAN2: $(active)"
+
+echo "== 2c. go to the covered workspace with the pointer already on it (SPAN2 is given back, client stays fullscreen)"
+d "hl.dsp.focus({ workspace = 2 })"; sleep 1; state; shot SPAN2 s2c-right; echo "  active window: $(active)"
+d "hl.dsp.cursor.move({ x = $((W1 + 8)), y = 300 })"; sleep 1; echo "  active window with the pointer beside local-app: $(active)"
+echo "== 2d. back to the client's workspace (SPAN2 is covered again)"
+d "hl.dsp.focus({ workspace = 1 })"; sleep 1; state; shot SPAN2 s2d-right; echo "  active window: $(active)"
+echo "== 2e. go to the covered workspace from the client's monitor, then back"
+d "hl.dsp.focus({ workspace = 2 })"; sleep 1; state; echo "  active window: $(active)"
+d "hl.dsp.focus({ workspace = 1 })"; sleep 1
+echo "== 2f. switch the covered monitor to an empty workspace, then back"
+d "hl.dsp.cursor.move({ x = $((W1 + 500)), y = 400 })"; sleep 0.5; d "hl.dsp.focus({ workspace = 5 })"; sleep 1; state; echo "  active window: $(active)"
+d "hl.dsp.focus({ workspace = 2 })"; d "hl.dsp.focus({ workspace = 1 })"; sleep 1
+echo "== 2g. a tiled window opens on the covered workspace"
+d "hl.dsp.cursor.move({ x = $((W1 + 500)), y = 400 })"; sleep 0.5; d "hl.dsp.exec_cmd(\"kitty --title late-tiled\")"; sleep 3; state; echo "  active window: $(active)"
+echo "== 2h. back to the client; the new window closes while its workspace is covered (local-app gets the space back in step 3)"
+d "hl.dsp.focus({ workspace = 1 })"; sleep 1; pkill -f "kitty --title late-tiled"; sleep 1; state
 
 echo "== 3. client asks for its current monitor only (GTK reset message)"; kill -USR1 $CPID; sleep 1.5; state; shot SPAN2 s3-right
 echo "== 4. client asks for all monitors again"; kill -USR2 $CPID; sleep 1.5; state
 echo "== 5. client leaves fullscreen"; kill -HUP $CPID; sleep 1.5; state; shot SPAN2 s5-right
 echo "== 6. client re-enters fullscreen (request should still apply)"; kill -HUP $CPID; sleep 1.5; state
+echo "== 6b. plugin reloaded under the spanning client (the request is picked up from the window again)"
+cp "$PLUGIN" "$RUN/hyprspan-reloaded.so" # a second path, see the note at the top about dlopen
+echo "  unload: $(hyprctl plugin unload "$RUN/hyprspan.so")"; sleep 1; state
+echo "  load: $(hyprctl plugin load "$RUN/hyprspan-reloaded.so")"; sleep 1; state
 echo "== 7. client exits"; pkill -f "span_client.py $RUN/late.log"; kill $CPID; sleep 1.5; state; shot SPAN2 s7-right
-echo "== 8. unload plugin: $(hyprctl plugin unload "$RUN/hyprspan.so")"; sleep 0.5
+echo "== 8. unload plugin: $(hyprctl plugin unload "$RUN/hyprspan-reloaded.so")"; sleep 0.5
 echo "== nested still alive: $(kill -0 $3 2>/dev/null && echo yes || echo NO)"
 echo "RUN=$RUN"
