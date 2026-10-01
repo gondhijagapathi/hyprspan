@@ -1,0 +1,25 @@
+name: build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1" # weekly, to notice when a new Hyprland release breaks the build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install Hyprland and build tools
+        run: pacman -Syu --noconfirm --needed base-devel git hyprland
+      - uses: actions/checkout@v7
+      - name: Hyprland version
+        run: pacman -Q hyprland
+      - name: Build
+        run: make
