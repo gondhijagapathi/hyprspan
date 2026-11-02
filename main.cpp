@@ -17,19 +17,26 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/plugins/HookSystem.hpp>
 #include <hyprland/src/animation/WorkspaceAnimationController.hpp>
-#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/LayerState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/view/LayerSurface.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include <hyprland/src/desktop/view/window/WindowBackend.hpp>
+#include <hyprland/src/desktop/view/window/WindowFullscreenPolicy.hpp>
+#include <hyprland/src/desktop/view/window/WindowMetadata.hpp>
+#include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
 #include <hyprland/src/event/EventBus.hpp>
+#include <hyprland/src/ipc/s1/S1.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/layout/target/Target.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/managers/fullscreen/handler/FullscreenHandler.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/WindowRenderPresentation.hpp>
+#include <hyprland/src/render/scene/SceneSelection.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/xwayland/XSurface.hpp>
 #include <hyprland/src/xwayland/XWM.hpp>
@@ -96,9 +103,19 @@ namespace {
     std::vector<CHyprSignalListener>               g_listeners;
     wl_event_source*                               g_layoutTimer = nullptr;
 
+    // The X window behind `w`, or nothing for a Wayland window.
+    std::optional<xcb_window_t> xidOf(const PHLWINDOW& w) {
+        if (!w)
+            return std::nullopt;
+        const auto ID = w->backend().clientID();
+        if (ID.type != Desktop::View::eBackendType::WINDOW_BACKEND_X11)
+            return std::nullopt;
+        return sc<xcb_window_t>(ID.id);
+    }
+
     PHLWINDOW windowForXID(xcb_window_t xid) {
         for (auto const& w : Desktop::windowState()->windows()) {
-            if (w->m_isX11 && w->m_xwaylandSurface && w->m_xwaylandSurface->m_xID == xid)
+            if (xidOf(w) == xid)
                 return w;
         }
         return nullptr;
@@ -173,10 +190,11 @@ namespace {
 
     // The span for a window, if it is fullscreen and its request covers more than one monitor.
     const SSpanRequest* activeSpan(const PHLWINDOW& w) {
-        if (!w || !w->m_isMapped || !w->m_isX11 || !w->m_xwaylandSurface)
+        const auto XID = xidOf(w);
+        if (!XID || !w->mapped())
             return nullptr;
 
-        const auto it = g_requests.find(w->m_xwaylandSurface->m_xID);
+        const auto it = g_requests.find(*XID);
         if (it == g_requests.end() || it->second.monitors.size() < 2)
             return nullptr;
 
@@ -189,7 +207,7 @@ namespace {
     // The spanning window that covers `ws`, which must be the active workspace of some other monitor the
     // span overlaps. The window's own workspace is handled by Hyprland's normal fullscreen logic.
     PHLWINDOW spanOwnerFor(const PHLWORKSPACE& ws) {
-        if (g_requests.empty() || !ws || ws->m_isSpecialWorkspace)
+        if (g_requests.empty() || !ws || ws->type() == Workspace::eWorkspaceType::SPECIAL)
             return nullptr;
 
         const auto MONITOR = ws->m_monitor.lock();
@@ -203,7 +221,7 @@ namespace {
                 req.window = w;
             }
 
-            if (!w || w->m_workspace == ws || !w->m_workspace || !w->m_workspace->isVisible() || w->m_workspace->m_isSpecialWorkspace)
+            if (!w || w->m_workspace == ws || !w->m_workspace || !w->m_workspace->visible() || w->m_workspace->type() == Workspace::eWorkspaceType::SPECIAL)
                 continue;
 
             if (!activeSpan(w))
@@ -226,24 +244,25 @@ namespace {
         const bool COVERED = controller()->hasFullscreen(ws);
 
         for (auto const& w : Desktop::windowState()->windows()) {
-            if (w->m_workspace != ws || w->m_pinned || controller()->isFullscreen(w))
+            if (w->m_workspace != ws || (w->m_state & Desktop::View::WINDOW_STATE_PINNED) || controller()->isFullscreen(w))
                 continue;
-            w->m_allowedOverFullscreen = !COVERED;
+            w->fullscreenPolicy().setAllowedOverFullscreen(!COVERED);
             w->updateFullscreenInputState();
         }
 
+        // Hyprland clears this either way and only sets it again when a layer maps or changes layer.
         const auto MONITOR = ws->m_monitor.lock();
         for (auto const& ls : Desktop::layerState()->layers()) {
             if (ls->m_monitor == MONITOR)
-                ls->m_aboveFullscreen = !COVERED;
+                ls->m_flags &= ~Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN;
         }
 
         Animation::Workspace::setFullscreenFadeAnimation(ws, COVERED ? Animation::Workspace::ANIMATION_TYPE_IN : Animation::Workspace::ANIMATION_TYPE_OUT);
 
         // Tiled layouts don't recalculate a workspace that has a fullscreen window, so catch up on whatever
         // opened or closed here while it was covered.
-        if (!COVERED && ws->m_space)
-            ws->m_space->recalculate();
+        if (const auto SPACE = ws->space(); !COVERED && SPACE)
+            SPACE->recalculate();
     }
 
     void refreshCoverage() {
@@ -278,17 +297,18 @@ namespace {
         if (!OWNER)
             return nullptr;
 
-        g_requests[OWNER->m_xwaylandSurface->m_xID].released.emplace_back(ws->m_monitor);
+        g_requests[*xidOf(OWNER)].released.emplace_back(ws->m_monitor);
         refreshCoverage();
         return OWNER;
     }
 
     // Covers the monitors `w` gave up again. Returns whether there were any.
     bool reclaimMonitors(const PHLWINDOW& w) {
-        if (!w || !w->m_isX11 || !w->m_xwaylandSurface)
+        const auto XID = xidOf(w);
+        if (!XID)
             return false;
 
-        const auto it = g_requests.find(w->m_xwaylandSurface->m_xID);
+        const auto it = g_requests.find(*XID);
         if (it == g_requests.end() || it->second.released.empty())
             return false;
 
@@ -378,10 +398,11 @@ namespace {
     // that reloading the plugin doesn't need each client to ask a second time.
     void restoreRequests(xcb_connection_t* conn) {
         for (auto const& w : Desktop::windowState()->windows()) {
-            if (!w->m_isX11 || !w->m_xwaylandSurface)
+            const auto ID = xidOf(w);
+            if (!ID)
                 continue;
 
-            const xcb_window_t XID   = w->m_xwaylandSurface->m_xID;
+            const xcb_window_t XID   = *ID;
             auto*              reply = xcb_get_property_reply(conn, xcb_get_property(conn, 0, XID, fullscreenMonitorsAtom(), XCB_ATOM_CARDINAL, 0, 4), nullptr);
             if (!reply)
                 continue;
@@ -412,11 +433,11 @@ namespace {
             wl_event_source_timer_update(g_layoutTimer, 250);
     }
 
-    std::string describeState(eHyprCtlOutputFormat, std::string) {
+    IPC::Socket1::SResponse describeState(const IPC::Socket1::SRequest&) {
         std::string out = std::format("atom {} = {}\n", FULLSCREEN_MONITORS, fullscreenMonitorsAtom());
         for (auto const& [xid, req] : g_requests) {
             const auto W = req.window.lock();
-            out += std::format("window 0x{:x} ({}) edges t{} b{} l{} r{} -> {} monitor(s) box {:.0f},{:.0f} {:.0f}x{:.0f} {}\n", xid, W ? W->m_title : "unmapped",
+            out += std::format("window 0x{:x} ({}) edges t{} b{} l{} r{} -> {} monitor(s) box {:.0f},{:.0f} {:.0f}x{:.0f} {}\n", xid, W ? W->metadata().title() : "unmapped",
                                req.edges[0], req.edges[1], req.edges[2], req.edges[3], req.monitors.size(), req.box.x, req.box.y, req.box.w, req.box.h,
                                activeSpan(W) ? "active" : "inactive");
             for (auto const& m : req.released) {
@@ -426,12 +447,12 @@ namespace {
         }
         for (auto const& ws : g_covered) {
             if (const auto WS = ws.lock())
-                out += std::format("covering workspace {} on {}\n", WS->m_name, WS->m_monitor ? WS->m_monitor->m_name : "?");
+                out += std::format("covering workspace {} on {}\n", WS->displayName(), WS->m_monitor ? WS->m_monitor->m_name : "?");
         }
         return out;
     }
 
-    SP<SHyprCtlCommand> g_hyprctlCommand;
+    SP<IPC::Socket1::SCommand> g_hyprctlCommand;
 
     // ---- hooks ----
 
@@ -446,7 +467,8 @@ namespace {
     CFunctionHook* g_hkFullWindowFocus      = nullptr;
     CFunctionHook* g_hkChangeWorkspace      = nullptr;
 
-    using PRENDERWINDOW = void (*)(Render::IHyprRenderer*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
+    using PRENDERWINDOW = void (*)(Render::IHyprRenderer*, Render::CRenderContext&, PHLWINDOW, PHLMONITOR, const Render::SWindowRenderPresentation&, const Time::steady_tp&, bool,
+                                   Render::eRenderPassMode, bool, bool);
     PRENDERWINDOW g_renderWindow = nullptr;
 
     void hkHandleClientMessage(CXWM* thisptr, xcb_client_message_event_t* e) {
@@ -512,17 +534,19 @@ namespace {
 
     // A covered workspace reports the spanning window as its fullscreen window, which sends rendering here,
     // but this pass only draws the workspace's own windows. Draw the span on top of them.
-    void hkRenderWorkspaceWindowsFullscreen(Render::IHyprRenderer* thisptr, PHLMONITOR monitor, PHLWORKSPACE ws, const Time::steady_tp& time) {
-        ((decltype(&hkRenderWorkspaceWindowsFullscreen))g_hkRenderFullscreen->m_original)(thisptr, monitor, ws, time);
+    // Hooks the overload that takes a scene mode: the one without is a wrapper the render loop never calls.
+    void hkRenderWorkspaceWindowsFullscreen(Render::IHyprRenderer* thisptr, Render::CRenderContext& ctx, PHLMONITOR monitor, PHLWORKSPACE ws, const Time::steady_tp& time,
+                                            Render::eSceneMode mode) {
+        ((decltype(&hkRenderWorkspaceWindowsFullscreen))g_hkRenderFullscreen->m_original)(thisptr, ctx, monitor, ws, time, mode);
 
         if (const auto OWNER = spanOwnerFor(ws))
-            g_renderWindow(thisptr, OWNER, monitor, time, false, Render::RENDER_PASS_ALL, false, false);
+            g_renderWindow(thisptr, ctx, OWNER, monitor, OWNER->presentation().renderPresentation(mode), time, false, Render::RENDER_PASS_ALL, false, false);
     }
 
     // Focusing a tiled window under a fullscreen one makes Hyprland take the fullscreen one out of fullscreen
     // or swap it. Under a span, give the monitor back instead.
     void hkFullWindowFocus(Desktop::CFocusState* thisptr, PHLWINDOW w, Desktop::eFocusReason reason, SP<CWLSurfaceResource> surface, bool forceFSCycle) {
-        if (w && !w->m_isFloating)
+        if (w && !w->isFloating())
             releaseMonitorOf(w->m_workspace);
         ((decltype(&hkFullWindowFocus))g_hkFullWindowFocus->m_original)(thisptr, w, reason, surface, forceFSCycle);
     }
@@ -530,7 +554,7 @@ namespace {
     // The user asked for a workspace on a covered monitor. That includes the one already showing there, which
     // Hyprland treats as nothing to do and so leaves the focus on the span.
     void hkChangeWorkspace(Monitor::CMonitor* thisptr, const PHLWORKSPACE& ws, bool internal, bool noMouseMove, bool noFocus) {
-        const auto OWNER = !internal && ws && !ws->m_isSpecialWorkspace ? releaseMonitorOf(thisptr->m_activeWorkspace) : nullptr;
+        const auto OWNER = !internal && ws && ws->type() != Workspace::eWorkspaceType::SPECIAL ? releaseMonitorOf(thisptr->m_activeWorkspace) : nullptr;
         ((decltype(&hkChangeWorkspace))g_hkChangeWorkspace->m_original)(thisptr, ws, internal, noMouseMove, noFocus);
 
         if (!OWNER || noFocus || Desktop::focusState()->window() != OWNER)
@@ -576,14 +600,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // Resolve everything before hooking anything, so a failed lookup leaves Hyprland untouched.
     void* const HANDLE_CLIENT_MESSAGE = findFunction("handleClientMessage", {"CXWM::handleClientMessage("});
     void* const CREATE_WM_WINDOW      = findFunction("createWMWindow", {"CXWM::createWMWindow("});
-    void* const HAS_FULLSCREEN        = findFunction("hasFullscreen", {"CFullscreenController::hasFullscreen(", "CWorkspace"});
-    void* const GET_FULLSCREEN_WINDOW = findFunction("getFullscreenWindow", {"CFullscreenController::getFullscreenWindow(", "CWorkspace"});
-    void* const GET_FULLSCREEN_MODES  = findFunction("getFullscreenModes", {"CFullscreenController::getFullscreenModes(", "CWorkspace"});
+    void* const HAS_FULLSCREEN        = findFunction("hasFullscreen", {"CFullscreenController::hasFullscreen(", "CHLWorkspace"});
+    void* const GET_FULLSCREEN_WINDOW = findFunction("getFullscreenWindow", {"CFullscreenController::getFullscreenWindow(", "CHLWorkspace"});
+    void* const GET_FULLSCREEN_MODES  = findFunction("getFullscreenModes", {"CFullscreenController::getFullscreenModes(", "CHLWorkspace"});
     void* const SET_SIZE_AND_POS      = findFunction("setTargetSizeAndPosition", {"IFullscreenHandler::setTargetSizeAndPosition("});
     void* const SYNC_SIZE_AND_POS     = findFunction("syncTargetSizeAndPosition", {"IFullscreenHandler::syncTargetSizeAndPosition("});
-    void* const RENDER_FULLSCREEN     = findFunction("renderWorkspaceWindowsFullscreen", {"IHyprRenderer::renderWorkspaceWindowsFullscreen("});
+    void* const RENDER_FULLSCREEN     = findFunction("renderWorkspaceWindowsFullscreen", {"IHyprRenderer::renderWorkspaceWindowsFullscreen(", "eSceneMode"});
     void* const FULL_WINDOW_FOCUS     = findFunction("fullWindowFocus", {"CFocusState::fullWindowFocus("});
-    void* const CHANGE_WORKSPACE      = findFunction("changeWorkspace", {"CMonitor::changeWorkspace(", "CWorkspace"});
+    void* const CHANGE_WORKSPACE      = findFunction("changeWorkspace", {"CMonitor::changeWorkspace(", "CHLWorkspace"});
     g_renderWindow                    = rc<PRENDERWINDOW>(findFunction("renderWindow", {"IHyprRenderer::renderWindow("}));
 
     auto hook = [&](void* source, void* destination) {
@@ -604,7 +628,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_hkFullWindowFocus      = hook(FULL_WINDOW_FOCUS, rc<void*>(&hkFullWindowFocus));
     g_hkChangeWorkspace      = hook(CHANGE_WORKSPACE, rc<void*>(&hkChangeWorkspace));
 
-    g_hyprctlCommand = HyprlandAPI::registerHyprCtlCommand(handle, SHyprCtlCommand{.name = "hyprspan", .exact = true, .fn = describeState});
+    g_hyprctlCommand = HyprlandAPI::registerHyprCtlCommand(handle, IPC::Socket1::SCommand{.name = "hyprspan", .match = IPC::Socket1::COMMAND_MATCH_EXACT, .handler = describeState});
 
     auto& events = Event::bus()->m_events;
     // Entering fullscreen starts over with every monitor covered.
@@ -615,14 +639,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_listeners.emplace_back(events.window.active.listen([](PHLWINDOW w, Desktop::eFocusReason) { reclaimMonitors(w); }));
     // Emitted before a new tiled window takes the workspace's fullscreen window out of fullscreen.
     g_listeners.emplace_back(events.window.open.listen([](PHLWINDOW w) {
-        if (w && !w->m_isFloating)
+        if (w && !w->isFloating())
             releaseMonitorOf(w->m_workspace);
     }));
     g_listeners.emplace_back(events.workspace.active.listen([](PHLWORKSPACE) { refreshCoverage(); }));
     g_listeners.emplace_back(events.window.openLate.listen([](PHLWINDOW w) { reapplyIfCovered(w ? w->m_workspace : nullptr); }));
     g_listeners.emplace_back(events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE ws) { reapplyIfCovered(ws); }));
     g_listeners.emplace_back(events.window.close.listen([](PHLWINDOW w) {
-        if (w && w->m_isX11 && w->m_xwaylandSurface && g_requests.erase(w->m_xwaylandSurface->m_xID))
+        if (const auto XID = xidOf(w); XID && g_requests.erase(*XID))
             refreshCoverage();
     }));
     g_listeners.emplace_back(events.monitor.layoutChanged.listen([] { scheduleReresolve(); }));

@@ -31,7 +31,7 @@ that send the same message are welcome.
 
 ## Requirements
 
-- Hyprland with XWayland enabled. `main` follows the current Hyprland release (0.56 at the time of writing).
+- Hyprland with XWayland enabled. `main` follows the current Hyprland release (0.57 at the time of writing).
 - Monitors arranged in one top-aligned row, see [Behaviour](#behaviour).
 - `xwayland:force_zero_scaling` off, which is the default.
 
