@@ -18,10 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Load a virtual graphics card
-        # the nested Hyprland needs a DRM device to render on; vkms is one made of software
+        # the nested Hyprland needs a DRM device to render on; vkms is one made of software. From the 7.0 kernels
+        # Ubuntu ships it in linux-modules, which the runner already has, and there is no linux-modules-extra.
         run: |
-          sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
-          sudo modprobe vkms
+          sudo modprobe vkms || {
+            sudo apt-get update -q
+            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sudo modprobe vkms
+          }
       - name: Run the suite
         run: docker run --rm --privileged -v "$PWD:/src" archlinux:latest /src/tests/ci.sh
       - name: Keep screenshots and logs
